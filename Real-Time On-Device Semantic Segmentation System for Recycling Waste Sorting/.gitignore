@@ -1,0 +1,126 @@
+# Miscellaneous
+*.class
+*.log
+*.pyc
+*.swp
+.DS_Store
+.atom/
+.build/
+.buildlog/
+.history
+.svn/
+.swiftpm/
+migrate_working_dir/
+
+# IntelliJ related
+*.iml
+*.ipr
+*.iws
+.idea/
+
+# The .vscode folder contains launch configuration and tasks you configure in
+# VS Code which you may wish to be included in version control, so this line
+# is commented out by default.
+.vscode/
+
+# Flutter/Dart/Pub related
+**/doc/api/
+**/ios/Flutter/.last_build_id
+.dart_tool/
+.flutter-plugins-dependencies
+.pub-cache/
+.pub/
+/build/
+/coverage/
+
+# Build artifacts & binaries
+*.apk
+*.aab
+*.ipa
+*.dSYM
+*.symbols
+app.*.symbols
+app.*.map.json
+
+# Android sensitive files
+android/local.properties
+android/key.properties
+*.keystore
+*.jks
+**/*.keystore
+**/*.jks
+
+# iOS
+ios/Flutter/Generated.xcconfig
+ios/Flutter/flutter_export_environment.sh
+
+# Flutter/Tooling
+.flutter-plugins
+.packages
+.metadata
+
+# Credentials & env
+.env
+.env.*
+*.pem
+*.p12
+*.p8
+*.key
+*.crt
+
+# Large data & models (keep placeholders)
+assets/model/**
+!assets/model/README.md
+*.onnx
+*.tflite
+*.pth
+*.safetensors
+*.npz
+*.npy
+*.bin
+
+# Model/config files
+config.json
+preprocessor_config.json
+
+# Datasets and evaluation images
+train/
+test/
+
+# Logs & notebooks outputs
+*.log
+**/.ipynb_checkpoints/**
+
+# Symbolication related
+app.*.symbols
+
+# Obfuscation related
+app.*.map.json
+
+# Android Studio will place build artifacts here
+/android/app/debug
+/android/app/profile
+/android/app/release
+
+# Debug/test scripts
+check_*.py
+test_*.py
+model_comparison.py
+split_data.py
+run_training.py
+performance_test.py
+eval_tflite_seg.py
+nul
+
+# Test images
+test_img.png
+
+# YOLO related
+yolo_dataset/
+yolo_runs/
+yolo11*.pt
+
+# Comparison results
+comparison_results/
+pubspec.lock
+analysis_options.yaml
