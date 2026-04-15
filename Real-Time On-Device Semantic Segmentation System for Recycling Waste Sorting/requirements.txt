@@ -1,0 +1,28 @@
+# Python 3.10 최적화된 안정적인 라이브러리 버전들
+# 모델 손실 없이 완벽한 호환성을 위한 정확한 버전
+
+# PyTorch 및 관련 라이브러리 (검증된 안정 버전)
+torch==2.1.0
+torchvision==0.16.0
+
+# TensorFlow 및 TFLite (Python 3.10 완벽 호환)
+tensorflow==2.15.0
+
+# Hugging Face Transformers (MobileViT 지원)
+transformers==4.35.2
+
+# ONNX 변환 (Python 3.10 안정 버전)
+onnx==1.14.1
+onnx-tf==1.10.0
+
+# 이미지 처리
+Pillow==10.0.1
+numpy==1.24.3
+
+# 기타 유틸리티
+tqdm==4.66.1
+
+# 추가 안정성 라이브러리들
+protobuf==3.20.3
+setuptools==68.2.2
+tensorflow_probability==0.23.0

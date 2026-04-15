@@ -1,0 +1,27 @@
+name: reco
+description: "A new Flutter project."
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: ">=3.2.0 <4.0.0"            # Flutter 3.16+에 포함되는 Dart 3.2 이상
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # 안정 조합(시연용)
+  camera: 0.10.5+9                 # 카메라 플러그인
+  permission_handler: 11.3.1       # 권한 요청
+  image: 4.1.7                     # 전처리(리사이즈/크롭)
+  cupertino_icons: 1.0.8
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: 4.0.0             # Dart 3.2대 호환 lints
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/model/model.onnx
