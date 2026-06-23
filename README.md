@@ -44,13 +44,6 @@ YOLO로 객체 탐지 후 SAM2로 세그멘테이션 마스크 생성·오버레
 
 ---
 
-## 🖼️ Multimodal
-
-### [CLIP — Zero-Shot Image Classification](./CLIP)
-CLIP(Contrastive Language-Image Pretraining)으로 학습하지 않은 클래스도 텍스트 설명만으로 분류하는 zero-shot 분류.
-
----
-
 ## 🔢 Tabular / Classical ML
 
 ### [Credit Card Fraud Detection](./Credit%20Card%20Fraud%20Detection)
