@@ -1,165 +1,85 @@
 # 🎓 Data Scientist Portfolio
 
----
-
-## 📊 Project
-
-### Project 1: Credit Card Fraud Detection
-
-**Objective** <br/>
-어떤 모델이 데이터를 축소하거나 증강하였을때 가장 뛰어난 검출능력을 보이는지 확인하였습니다.
-
-**Technologies Used** <br/>
-- Dimensionality Reduction: PCA, tSNE, UMAP
-- Dimensionality Augmentation: SMOTE, BorderLineSMOTE, ADASYN
-- Machine Learning Models: RandomForest, XGBoost, CatBoost, LightGBM
-- Deep Learning Models: TensorFlow, Pytorch 
-
-**Key Results** <br/>
-Dimesionality Reduction과 Augmentation 중에 뭐가 더 모델의 성능에 좋을까 비교해보기 위해서 
-다양한 머신러닝 모델과 딥러닝 모델을 활용하였습니다. 
-그 결과 어떤 방식으로 어떤 모델을 사용했을때 가장 성능이 좋은지 순위표를 만들 수 있었습니다.
-
-**URL** <br/>
-https://www.kaggle.com/datasets/mlg-ulb/creditcardfraud
+머신러닝·딥러닝 모델링부터 배포 가능한 엔드투엔드 애플리케이션까지 다룬 프로젝트 모음입니다.
+중요도·완성도 순으로 정리했습니다.
 
 ---
 
-### Project 2: YOLOv10 Pretrained model vs Custom model
+## 🏆 Flagship
 
-**Objective** <br/>
-Pretrained YOLOv10과 Custom YOLOv10중 어떤 것이 더 성능이 좋은지 비교합니다.
-
-**Technologies Used** <br/>
-
-- Model: YOLOv10
-- Package: ultralytics, supervision, cv2
-
-**Key Results** <br/>
-비디오를 캡처한 후 여러 프레임을 생성하였고 <br/>
-각 프레임을 모델로 학습시킨 후, 이러한 프레임들을 다시 하나의 비디오로 만들었습니다. <br/>
-Pretrained model의 경우, 모델을 그대로 사용하여 예측을 수행했지만 <br/>
-Custom model의 경우, 기존의 YOLOv10 가중치를 사용하여 준비된 데이터를 학습시키고, <br/>
-그 결과 나온 최고의 가중치를 최종 모델의 가중치로 선택한 후 이를 예측에 사용했습니다. <br/>
-이 과정은 릴레이 레이스와 비슷합니다.
-
-Pretrained model과 Custom model을 비교했을 때, 상당한 차이가 있었습니다. <br/>
-다양한 클래스의 이미지로 지속적으로 학습된 Custom model은 자동으로 인식하는 Pretrained model보다 <br/>
-클래스 예측 범위가 더 넓었지만, 정확도는 Pretrained model에 비해 훨씬 낮았습니다.
-
-**URL** <br/>
-https://github.com/THU-MIG/yolov10 <br/>
-https://docs.ultralytics.com/ko/models/yolov10
+### [Real-Time On-Device Semantic Segmentation System for Recycling Waste Sorting](./Real-Time%20On-Device%20Semantic%20Segmentation%20System%20for%20Recycling%20Waste%20Sorting)
+**On-device** 실시간 시맨틱 세그멘테이션으로 재활용 폐기물을 분류하는 모바일 시스템.
+- DeepLabV3 + MobileViT, YOLO11n-seg 학습 → **ONNX 변환** → 모바일(Flutter/Android) 온디바이스 추론
+- 서버 없이 기기에서 직접 추론하는 엣지 AI 파이프라인 (학습 → 경량화 → 배포)
 
 ---
 
-### Project 3: Detectron2 Pretrained model vs Custom model
+## 📦 Applications & Dashboards
 
-**Objective** <br/>
-Pretrained detectron2와 Custom detectron2중 어떤 것이 더 성능이 좋은지 비교합니다.
+### [Coding Test Prep Platform](./Coding%20Test%20Prep%20Platform)
+브라우저에서 Python을 직접 실행·자동 채점하는 코딩테스트 학습 웹앱.
+- Next.js 15 + TypeScript + Supabase, **Pyodide** 기반 브라우저 내 Python 실행, 테스트 케이스 자동 채점
+- Notion → Supabase 콘텐츠 동기화 파이프라인, Vercel 배포
 
-**Technologies Used** <br/>
-- Model: Detectron2
-- Package: detectron2, cv2
+### [Time Series Forecasting Dashboard](./Time%20Series%20Forecasting%20Dashboard)
+단변량 시계열 CSV 업로드 → 9개 예측 모델 비교·평가하는 인터랙티브 대시보드.
+- Streamlit · sktime · Prophet, 성능(RMSE/MAE/MAPE 등) + 편향(RSFE/TS) 진단, Docker
 
-**Key Results** <br/>
-detectron2는 yolov10이랑 거의 똑같지만 차이점이 두가지 있습니다.
-첫번째, detectron2는 yolov10과 달리 faster_rcnn weights를 사용합니다.
-두번째, yolov10에서는 pretrained와 custom이 결과가 조금 다르게 나왔지만 
-detectron은 차이가 느껴지지 않았습니다.
-
-**URL** <br/>
-https://github.com/facebookresearch/detectron2/blob/main/README.md
+### [Multivariate Time Series Anomaly Detection](./Multivariate%20Time%20Series%20Anomaly%20Detection)
+다변량 시계열 이상탐지 대시보드 (예측모델 × Scorer 격자 평가).
+- `darts` ForecastingAnomalyModel, ML 5종 + DL 7종, AUC-ROC/AUC-PR/F1 정량 평가, Docker
 
 ---
 
-### Project 4: AI Cover - RVC
+## 🧠 Computer Vision
 
-**Objective** <br/>
-RVC 모델을 활용해 한 가수의 목소리로 다른 가수의 노래를 부르게 하는 것 
+### [YOLOv10 — Pretrained vs Custom](./Computer%20Vision/YOLO)
+Pretrained YOLOv10과 Custom 학습 모델의 탐지 성능 비교. 비디오 프레임 추출 → 학습 → 재합성 파이프라인.
 
-**Technologies Used** <br/>
-- Model: RVC
+### [Detectron2 — Pretrained vs Custom](./Computer%20Vision/Detectron)
+Faster R-CNN 기반 Detectron2의 pretrained vs custom 비교.
 
-**Key Results** <br/>
-이 프로젝트는 5가지 과정으로 나누어서 설명할 수 있습니다.
-첫번째, 다운받아온 youtube music을 음성과 배경음악으로 split합니다.
-두번째, 모델이 더 잘 학습할 수 있도록 음성을 여러개로 slice합니다.
-세번째, RVC_pretrained를  download하고.
-네번째, train합니다.
-다섯번째, 가수가 다른 노래를 부르는 음악파일을 생성합니다.
+### [SAM2 + YOLO Segmentation](./Computer%20Vision/SAM)
+YOLO로 객체 탐지 후 SAM2로 세그멘테이션 마스크 생성·오버레이.
 
-생각보다 자연스러운 음악이 생성되어서 놀라웠습니다.
-디테일한 설정도 할 수 있는데 전문가가 있다면 더욱 더 싱크로율과 완성도가 높아질 것으로 기대됩니다.
-
-**URL** <br/>
-https://github.com/facebookresearch/demucs <br/>
-https://github.com/openvpi/audio-slicer
+### [CLIP — Zero-Shot Image Classification](./Computer%20Vision/CLIP)
+CLIP(Contrastive Language-Image Pretraining)으로 학습하지 않은 클래스도 텍스트 설명만으로 분류하는 zero-shot 분류.
 
 ---
 
-### Project 5: CNN - CIFAR-10
+## 🔢 Tabular / Classical ML
 
-**Objective** <br/>
-CIFAR-10 데이터를 활용해서 
-Tensorflow와 Pytorch로 복잡한 CNN 구성해보기
-
-**Technologies Used** <br/>
-- Models : TensorFlow, Pytorch
-- CNN Process : Data Augmentation, Conv2d, Padding, Batch Normalization, Pooling, Dropout, Flatten 
-
-**Key Results** <br/>
-Tensorflow와 Pytorch로 할 수 있는 CNN의 모든 과정을 담았습니다.
-
-**URL** <br/>
-https://www.cs.toronto.edu/~kriz/cifar.html
+### [Credit Card Fraud Detection](./Credit%20Card%20Fraud%20Detection)
+차원 축소(PCA/t-SNE/UMAP) vs 증강(SMOTE/BorderlineSMOTE/ADASYN)이 모델 검출 성능에 미치는 영향 비교.
+- ML(RandomForest/XGBoost/CatBoost/LightGBM) + DL(TensorFlow/PyTorch)로 조합별 성능 순위표 도출
 
 ---
 
-### Project 6: CLIP
+## 🎙️ Generative AI
 
-**Objective** <br/>
-웹 이미지와 컴퓨터에 저장된 이미지를 대상으로 CLIP 모델(Zero-shot image classification model)을 사용하는 방법을 알아내는 것.
-
-**Technologies Used** <br/>
-
-Zero-shot image classification은 모델이 특정 클래스의 이미지를 훈련 중에 직접 학습하지 않았더라도 새로운 이미지를 정확하게 분류할 수 있는 기술입니다. 모델은 학습된 다른 클래스 간의 유사성 또는 관계와 사전에 학습된 지식을 활용하여 새로운 클래스를 추론합니다.
-
-CLIP(Contrastive Language-Image Pretraining)은 Zero-shot image classification의 대표적인 모델입니다. CLIP은 이미지와 텍스트를 동시에 학습하여 두 가지 간의 관계를 이해할 수 있게 합니다. CLIP은 대조적 학습을 사용하여 이미지와 해당 이미지의 텍스트 설명을 짝지어 학습합니다. 이를 통해 모델은 이전에 보지 못한 클래스도 적절한 텍스트 설명과 연결하여 효과적으로 분류할 수 있습니다.
-
-**Key Results** <br/>
-CLIP에 의해 예측된 웹 이미지와 컴퓨터에 저장된 이미지의 결과.
-
-**URL** <br/>
-https://github.com/openai/CLIP
+### AI Cover (RVC)
+RVC 모델로 한 가수의 목소리로 다른 곡을 부르게 하는 AI 커버. (음원 분리 → 슬라이싱 → 학습 → 생성)
+> 외부(Colab) 작업 — 코드 폴더 없음.
 
 ---
 
-### Project 7: SAM2
+## 🧱 Deep Learning Foundations
 
-**Objective** <br/>
-YOLO를 사용해 객체를 탐지한 후, SAM2를 사용해 탐지된 객체의 세그멘테이션 마스크를 생성하고 이후에 각 객체에 맞는 색상으로 마스크를 오버레이하여 출력 영상을 생성합니다. YOLO는 바운딩 박스를 생성하고, SAM은 이를 기반으로 세그멘테이션을 처리하여 연동합니다.
+### [CIFAR-10 CNN](./Deep%20Learning%20Foundations/CIFAR)
+TensorFlow·PyTorch로 구현한 CNN 전 과정 (Data Augmentation, Conv/BatchNorm/Pooling/Dropout 등).
 
-**Technologies Used** <br/>
-- Models: SAM2, YOLO
-
-**Key Results** <br/>
-모델로 탐지된 새로운 영상
-
-**URL** <br/>
-https://github.com/facebookresearch/segment-anything-2 <br/>
-https://docs.ultralytics.com/ko/models/yolov10
+### [MNIST](./Deep%20Learning%20Foundations/MNIST)
+SimpleCNN 기반 손글씨 숫자 분류 — 전처리·학습·추론 기본 파이프라인.
 
 ---
 
 ## 📈 Skills
 
-- **Programming Languages**: Python
-- **Data Preprocessing**: Pandas, NumPy
-- **Data Visualization**: Matplotlib
-- **Machine Learning & Deep Learning**: Scikit-Learn, TensorFlow, Pytorch, OpenCV
-- **Databases**: 
-- **Tools**: Jupyter Notebook, Google Colab
+- **Languages**: Python, TypeScript
+- **ML/DL**: scikit-learn, TensorFlow, PyTorch, OpenCV, sktime, darts
+- **Data**: Pandas, NumPy, Matplotlib, Plotly
+- **App/Deploy**: Streamlit, Next.js, Supabase, Docker, ONNX, Vercel, Hugging Face Spaces
+- **Tools**: Jupyter, Google Colab, Git
 
 ---
 
@@ -172,7 +92,3 @@ https://docs.ultralytics.com/ko/models/yolov10
 </p>
 
 ---
-
-
-
-
