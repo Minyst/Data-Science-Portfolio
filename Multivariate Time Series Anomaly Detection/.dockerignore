@@ -1,0 +1,19 @@
+# Keep the build context (and therefore the image) minimal & free of local cruft
+__pycache__/
+*.pyc
+*.pyo
+tests/
+sample_data/
+.pytest_cache/
+.darts/
+darts_logs/
+.streamlit/
+*.ckpt
+.ipynb_checkpoints/
+.git/
+.gitignore
+*.md
+.env
+.env.*
+*.log
+.DS_Store

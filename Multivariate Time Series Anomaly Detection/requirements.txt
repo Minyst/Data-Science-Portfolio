@@ -1,0 +1,22 @@
+# CPU-only PyTorch wheels (keeps the image small — no CUDA)
+--extra-index-url https://download.pytorch.org/whl/cpu
+
+torch==2.5.1
+
+# Time-series anomaly detection stack (versions pinned to the verified local env)
+darts==0.44.1
+# darts' torch models (BlockRNN, Transformer, NBEATS, …) need lightning explicitly;
+# without this pin the Space pulls an incompatible version and torch support silently disables.
+pytorch-lightning==2.6.4
+xgboost==2.1.3
+lightgbm==4.6.0
+catboost==1.2.7
+scikit-learn==1.7.2
+# EDA 진단(ADF 정상성·계절 분해·ACF/PACF) — darts 의존성이지만 명시 고정
+statsmodels==0.14.6
+
+# Web UI / data
+streamlit==1.37.1
+plotly==5.24.1
+pandas==2.2.2
+numpy==1.26.4

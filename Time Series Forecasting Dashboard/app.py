@@ -1,6 +1,10 @@
+﻿import math
+import threading
+import time
 import traceback
 
 import streamlit as st
+from streamlit.runtime.scriptrunner import add_script_run_ctx
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
@@ -8,7 +12,7 @@ from plotly.subplots import make_subplots
 
 from sktime.forecasting.naive import NaiveForecaster
 from sktime.forecasting.exp_smoothing import ExponentialSmoothing
-from sktime.forecasting.arima import AutoARIMA, ARIMA
+from sktime.forecasting.arima import AutoARIMA
 from sktime.forecasting.trend import STLForecaster
 from sktime.forecasting.theta import ThetaForecaster
 import logging
@@ -88,14 +92,12 @@ MODEL_COLORS = {
     "Holt": "#FF6692",
     "HoltWinters": "#B6E880",
     "STL": "#FF97FF",
-    "ARIMA": "#2CA02C",
-    "SARIMA": "#D62728",
     "AutoARIMA": "#AB63FA",
     "Theta": "#FFA15A",
     "Prophet": "#00CC96",
 }
 
-INTERVAL_CAPABLE = {"ARIMA", "SARIMA", "AutoARIMA", "Theta", "Prophet"}
+INTERVAL_CAPABLE = {"AutoARIMA", "Theta", "Prophet"}
 ALL_MODEL_NAMES = list(MODEL_COLORS.keys())
 
 # ──────────────────────────────────────────────
@@ -145,6 +147,21 @@ if uploaded_file is not None:
         freq_txt = _freq_label.get(inferred_freq, inferred_freq if inferred_freq else "불명")
 
         # ──────────────────────────────────────
+        # CSV fingerprint 변경 감지 — 데이터셋 의존 위젯의 옛 상태가
+        # 새 옵션 목록에 없으면 Streamlit이 오류를 내므로 사전 무효화한다.
+        # ──────────────────────────────────────
+        _dynamic_keys = ["date_range", "horizon_preset", "horizon_custom"]
+        _csv_fp = (uploaded_file.name, len(df), str(df.index[0]), str(df.index[-1]))
+        if st.session_state.get("_csv_fingerprint") != _csv_fp:
+            for _k in _dynamic_keys:
+                st.session_state.pop(_k, None)
+            # 새 CSV의 옛 학습 결과 캐시가 hit되어 stale 예측이 노출되지 않도록 함께 초기화
+            st.session_state.trained = False
+            st.session_state.train_settings = {}
+            st.session_state.train_results = {}
+            st.session_state["_csv_fingerprint"] = _csv_fp
+
+        # ──────────────────────────────────────
         # 날짜 범위 필터 (데이터에 존재하는 날짜 기반)
         # ──────────────────────────────────────
         st.sidebar.subheader("📅 데이터 범위")
@@ -156,6 +173,7 @@ if uploaded_file is not None:
             "사용할 구간",
             options=date_labels,
             value=(date_labels[0], date_labels[-1]),
+            key="date_range",
         )
         start_date = pd.Timestamp(start_label)
         end_date = pd.Timestamp(end_label)
@@ -187,12 +205,13 @@ if uploaded_file is not None:
                 preset_list.append(f"{v}스텝 ({v}{freq_unit})")
         preset_list.append("직접 입력")
 
-        preset_choice = st.sidebar.selectbox("예측 시평", preset_list)
+        preset_choice = st.sidebar.selectbox("예측 시평", preset_list, key="horizon_preset")
 
         if preset_choice == "직접 입력":
             horizon = st.sidebar.slider(
                 "시평 값 설정", min_value=1, max_value=max_horizon,
                 value=min(12, max_horizon), step=1,
+                key="horizon_custom",
             )
         else:
             horizon = int(preset_choice.split("스텝")[0])
@@ -209,8 +228,12 @@ if uploaded_file is not None:
         )
         st.sidebar.caption(f"전체 {data_size}개 = 학습 {train_remaining}개 + 테스트 {horizon}개 (주기: {freq_txt})")
 
-        sp = st.sidebar.number_input("계절 주기 (Seasonal Period)", min_value=1, value=12, step=1)
-        selected_models = st.sidebar.multiselect("사용할 모델 선택", ALL_MODEL_NAMES, default=ALL_MODEL_NAMES)
+        sp = st.sidebar.number_input("계절 주기 (Seasonal Period)", min_value=1, value=12, step=1, key="sp")
+        # default 대신 session_state로 초기값 관리 — Session State API와 default 동시 사용 시
+        # Streamlit이 경고를 출력하므로 default 인자는 제거.
+        if "selected_models" not in st.session_state:
+            st.session_state["selected_models"] = list(ALL_MODEL_NAMES)
+        selected_models = st.sidebar.multiselect("사용할 모델 선택", ALL_MODEL_NAMES, key="selected_models")
         forecast_mode = st.sidebar.selectbox(
             "예측 방식",
             ["기본 (단일 학습)", "Expanding Window (확장 윈도우)", "Rolling Window (고정 윈도우)"],
@@ -220,35 +243,39 @@ if uploaded_file is not None:
                 "Expanding: 1-step씩 실제값을 추가하며 반복 예측 (학습 데이터 증가).\n"
                 "Rolling: 고정 크기 윈도우가 1-step씩 이동하며 반복 예측."
             ),
+            key="forecast_mode",
         )
         use_expanding = forecast_mode.startswith("Expanding")
         use_rolling = forecast_mode.startswith("Rolling")
-        show_ci = st.sidebar.checkbox("신뢰구간 표시 (지원 모델만)", value=False)
+        show_ci = st.sidebar.checkbox("신뢰구간 표시 (지원 모델만)", value=False, key="show_ci")
         if len(selected_models) == 0:
             st.warning("최소 1개 이상의 모델을 선택해주세요.")
             st.stop()
 
         st.sidebar.markdown("---")
         _reset_keys = [
+            "date_range", "horizon_preset", "horizon_custom",
+            "sp", "selected_models", "forecast_mode", "show_ci",
             "naive_strat", "sma_win", "es_alpha", "holt_alpha", "holt_beta",
             "hw_alpha", "hw_beta", "hw_seasonal",
-            "arima_p", "arima_d", "arima_q",
             "prophet_season_mode", "prophet_cp_scale", "prophet_season_scale",
         ]
         if st.sidebar.button("🔄 설정 초기화", use_container_width=True):
             for k in _reset_keys:
                 if k in st.session_state:
                     del st.session_state[k]
+            # default가 있는 위젯은 명시적으로 default를 다시 set —
+            # Streamlit 위젯 캐시 quirk로 `del` 만으로는 복귀가 보장되지 않는 경우가 있음.
+            st.session_state["selected_models"] = list(ALL_MODEL_NAMES)
             st.session_state.trained = False
             st.session_state.train_settings = {}
             st.session_state.train_results = {}
             st.rerun()
-        run_clicked = st.sidebar.button("🚀 학습 시작", use_container_width=True, type="primary")
 
-        # 학습 시작 또는 기존 결과 표시 판단 (설정 변경 감지는 hp 수집 후 아래에서 처리)
-        if not run_clicked and not st.session_state.trained:
-            st.info("**왼쪽 패널에서 설정을 완료한 후 '🚀 학습 시작' 버튼을 눌러주세요.**")
-            st.stop()
+        st.sidebar.markdown(
+            "<p style='text-align:center; margin-top:8px; color:rgba(49, 51, 63, 0.6); font-size:14px;'>모델 설정탭으로 이동</p>",
+            unsafe_allow_html=True,
+        )
 
         # ──────────────────────────────────────
         # Train / Test 분할
@@ -274,8 +301,8 @@ if uploaded_file is not None:
         # ──────────────────────────────────────
         # 탭 구성 (5탭)
         # ──────────────────────────────────────
-        tab_overview, tab_settings, tab_forecast, tab_metrics = st.tabs(
-            ["📊 데이터 개요", "⚙️ 모델 설정", "🎯 모델별 예측", "💡 성능 비교"]
+        tab_settings, tab_overview, tab_forecast, tab_metrics = st.tabs(
+            ["⚙️ 모델 설정", "📊 데이터 개요", "🎯 모델별 예측", "💡 성능 비교"]
         )
 
         # ============================================================
@@ -363,12 +390,77 @@ if uploaded_file is not None:
                 else:
                     st.info(f"계절 분해를 위해 최소 {sp * 2}개 이상의 데이터가 필요합니다.")
 
+            st.markdown("---")
+            # ACF / PACF 자기상관 분석
+            with st.expander("🔍 ACF / PACF (자기상관 분석)", expanded=True):
+                st.caption("자기상관함수(ACF) / 부분자기상관함수(PACF) — 시계열의 정상성 및 계절성 패턴 진단. 회색 음영은 95% 신뢰구간이며, 막대가 음영을 벗어나면 유의한 자기상관.")
+                y_acf = y.dropna()
+                if len(y_acf) >= 10:
+                    try:
+                        from statsmodels.tsa.stattools import acf as _acf_fn, pacf as _pacf_fn
+                        nlags = min(40, len(y_acf) // 2 - 1)
+                        acf_vals = _acf_fn(y_acf, nlags=nlags)
+                        pacf_vals = _pacf_fn(y_acf, nlags=nlags)
+                        ci_band = 1.96 / np.sqrt(len(y_acf))
+
+                        fig_acf = make_subplots(
+                            rows=1, cols=2,
+                            subplot_titles=["Autocorrelation (ACF)", "Partial Autocorrelation (PACF)"],
+                            horizontal_spacing=0.1,
+                        )
+                        # ACF: stems + markers
+                        for i, v in enumerate(acf_vals):
+                            fig_acf.add_trace(go.Scatter(
+                                x=[i, i], y=[0, v], mode="lines",
+                                line=dict(color="#636EFA", width=1.5),
+                                showlegend=False, hoverinfo="skip",
+                            ), row=1, col=1)
+                        fig_acf.add_trace(go.Scatter(
+                            x=list(range(len(acf_vals))), y=acf_vals,
+                            mode="markers", marker=dict(color="#636EFA", size=6),
+                            showlegend=False,
+                            hovertemplate="lag %{x}: %{y:.3f}<extra></extra>",
+                        ), row=1, col=1)
+                        # PACF: stems + markers
+                        for i, v in enumerate(pacf_vals):
+                            fig_acf.add_trace(go.Scatter(
+                                x=[i, i], y=[0, v], mode="lines",
+                                line=dict(color="#EF553B", width=1.5),
+                                showlegend=False, hoverinfo="skip",
+                            ), row=1, col=2)
+                        fig_acf.add_trace(go.Scatter(
+                            x=list(range(len(pacf_vals))), y=pacf_vals,
+                            mode="markers", marker=dict(color="#EF553B", size=6),
+                            showlegend=False,
+                            hovertemplate="lag %{x}: %{y:.3f}<extra></extra>",
+                        ), row=1, col=2)
+                        # 95% 신뢰구간 음영 + 0 기준선
+                        for col_idx in [1, 2]:
+                            fig_acf.add_shape(
+                                type="rect", xref=f"x{col_idx}", yref=f"y{col_idx}",
+                                x0=0, x1=nlags, y0=-ci_band, y1=ci_band,
+                                fillcolor="rgba(150,150,150,0.18)", line_width=0, layer="below",
+                            )
+                            fig_acf.add_hline(y=0, line=dict(color="black", width=0.5), row=1, col=col_idx)
+
+                        fig_acf.update_yaxes(range=[-1.05, 1.05])
+                        fig_acf.update_xaxes(title_text="Lag")
+                        fig_acf.update_layout(
+                            height=340, template="plotly_white",
+                            margin=dict(l=50, r=20, t=50, b=40),
+                        )
+                        st.plotly_chart(fig_acf, use_container_width=True)
+                    except Exception as e:
+                        st.warning(f"ACF/PACF 계산 실패: {e}")
+                else:
+                    st.info("ACF/PACF 분석을 위해 최소 10개 이상의 데이터가 필요합니다.")
+
         # ============================================================
         # 탭 2: 모델 하이퍼파라미터 설정
         # ============================================================
         with tab_settings:
             st.subheader("⚙️ 모델별 하이퍼파라미터 설정")
-            st.caption("선택된 모델의 핵심 파라미터를 조절할 수 있습니다. 변경 시 자동으로 재학습됩니다.")
+            st.caption("선택된 모델의 핵심 파라미터를 조절할 수 있습니다. 변경 후 하단 **🚀 학습 시작** 버튼을 누르면 적용됩니다.")
 
             # 파라미터 수집용 딕셔너리
             hp = {}
@@ -406,18 +498,6 @@ if uploaded_file is not None:
                             )
                         elif name == "STL":
                             st.info(f"계절 주기(sp={sp})가 사이드바에서 자동 연동됩니다.")
-                        elif name == "ARIMA":
-                            hp["ARIMA_p"] = st.slider("AR 차수 (p)", 0, 10, 1, key="arima_p", help="자기회귀 차수")
-                            hp["ARIMA_d"] = st.slider("차분 차수 (d)", 0, 3, 1, key="arima_d", help="비정상성 제거를 위한 차분 횟수")
-                            hp["ARIMA_q"] = st.slider("MA 차수 (q)", 0, 10, 0, key="arima_q", help="이동평균 차수")
-                        elif name == "SARIMA":
-                            hp["SARIMA_p"] = st.slider("AR 차수 (p)", 0, 5, 1, key="sarima_p", help="비계절 자기회귀 차수")
-                            hp["SARIMA_d"] = st.slider("차분 차수 (d)", 0, 2, 1, key="sarima_d", help="비계절 차분 횟수")
-                            hp["SARIMA_q"] = st.slider("MA 차수 (q)", 0, 5, 1, key="sarima_q", help="비계절 이동평균 차수")
-                            hp["SARIMA_P"] = st.slider("계절 AR 차수 (P)", 0, 2, 1, key="sarima_P", help="계절 자기회귀 차수")
-                            hp["SARIMA_D"] = st.slider("계절 차분 차수 (D)", 0, 1, 1, key="sarima_D", help="계절 차분 횟수")
-                            hp["SARIMA_Q"] = st.slider("계절 MA 차수 (Q)", 0, 2, 1, key="sarima_Q", help="계절 이동평균 차수")
-                            st.info(f"계절 주기(sp={sp})가 사이드바에서 자동 연동됩니다.")
                         elif name == "AutoARIMA":
                             st.info(f"자동 파라미터 탐색 (sp={sp})")
                         elif name == "Theta":
@@ -438,6 +518,17 @@ if uploaded_file is not None:
                                 0.01, 10.0, 10.0, 0.1, key="prophet_season_scale",
                                 help="높을수록 계절 패턴을 강하게 반영"
                             )
+
+            # ── 학습 시작 버튼 (모델 설정 탭 하단, 가운데 배치) ──
+            st.markdown("---")
+            _btn_l, _btn_c, _btn_r = st.columns([1, 2, 1])
+            with _btn_c:
+                run_clicked = st.button(
+                    "🚀 학습 시작", type="primary", use_container_width=True,
+                    key="run_train_btn",
+                )
+                if st.session_state.trained:
+                    st.success("✅ 학습 완료 — 결과 탭에서 확인하세요. 파라미터 변경 시 다시 클릭.")
 
         # ──────────────────────────────────────
         # 설정 변경 감지 (사이드바 + 하이퍼파라미터 모두 포함)
@@ -468,6 +559,21 @@ if uploaded_file is not None:
                     continue
             return None
 
+        def _build_theta(data):
+            """Theta 빌더.
+            Hyndman FPP3 §8.10 / Assimakopoulos & Nikolopoulos(2000):
+            표준 Theta는 multiplicative 계절분해를 가정 → y>0 필요.
+            데이터에 0/음수가 있으면 R `forecast::thetaf`와 동일하게 비계절 Theta
+            (deseasonalize=False)로 fallback. 이는 SES + drift 조합으로 환원되어
+            계절성을 잃지만 정의상 유효한 Theta 변형이다."""
+            y_arr = np.asarray(data.values, dtype=float)
+            if np.any(y_arr <= 0):
+                m = ThetaForecaster(sp=sp, deseasonalize=False)
+            else:
+                m = ThetaForecaster(sp=sp)
+            m.fit(data)
+            return m
+
         model_factories = {
             "Naive": lambda: NaiveForecaster(strategy=hp.get("Naive_strategy", "last")),
             "SMA": lambda: NaiveForecaster(strategy="mean", window_length=hp.get("SMA_window", 5)),
@@ -479,24 +585,35 @@ if uploaded_file is not None:
                 smoothing_level=hp.get("Holt_alpha", 0.3),
                 smoothing_trend=hp.get("Holt_beta", 0.05),
             ),
-            "STL": lambda: STLForecaster(sp=sp),
-            "ARIMA": lambda: ARIMA(
-                order=(hp.get("ARIMA_p", 1), hp.get("ARIMA_d", 1), hp.get("ARIMA_q", 0)),
+            # STL: Cleveland(1990) 표준 jump=ceil(window/10) — R `stl()` 기본값과 동일.
+            # statsmodels 기본 jump=1보다 20배 이상 빠르며 예측값은 사실상 동일.
+            "STL": lambda: STLForecaster(
+                sp=sp,
+                seasonal_jump=1,
+                trend_jump=max(1, math.ceil(
+                    (math.ceil((1.5 * sp) / (1 - 1.5 / 7)) | 1) / 10
+                )),
+                low_pass_jump=max(1, math.ceil((sp + (0 if sp % 2 else 1)) / 10)),
+            ),
+            "AutoARIMA": lambda: AutoARIMA(
+                sp=sp,
+                seasonal=(sp > 1),
+                stepwise=True,
+                information_criterion="aic",
+                n_jobs=1,
+                random=False,
+                random_state=42,
+                error_action="ignore",
                 suppress_warnings=True,
             ),
-            "SARIMA": lambda: ARIMA(
-                order=(hp.get("SARIMA_p", 1), hp.get("SARIMA_d", 1), hp.get("SARIMA_q", 1)),
-                seasonal_order=(hp.get("SARIMA_P", 1), hp.get("SARIMA_D", 1), hp.get("SARIMA_Q", 1), sp),
-                suppress_warnings=True,
-            ),
-            "AutoARIMA": lambda: AutoARIMA(suppress_warnings=True, sp=sp),
-            "Theta": lambda: ThetaForecaster(sp=sp),
+            # Theta는 데이터 부호에 따라 deseasonalize 분기가 필요하므로
+            # _build_theta(data) 헬퍼로 호출 시점에 빌드 (HoltWinters 패턴과 동일)
         }
 
         # ──────────────────────────────────────
         # Prophet 헬퍼 함수
         # ──────────────────────────────────────
-        def _prophet_fit_predict(y_data, h, return_ci=False):
+        def _prophet_fit_predict(y_data, h, return_ci=False, return_in_sample=False):
             """Prophet 학습 & 예측. y_data는 DatetimeIndex를 가진 Series."""
             # Prophet은 DatetimeIndex 필요 — PeriodIndex → Timestamp 변환
             idx = y_data.index
@@ -522,13 +639,173 @@ if uploaded_file is not None:
             fc = m.predict(future)
             fc_tail = fc.tail(h)
             y_pred = pd.Series(fc_tail["yhat"].values, index=fc_tail["ds"].values)
+
+            extras = []
             if return_ci:
                 ci_df = pd.DataFrame({
                     "lower": fc_tail["yhat_lower"].values,
                     "upper": fc_tail["yhat_upper"].values,
                 }, index=fc_tail["ds"].values)
-                return y_pred, ci_df
+                extras.append(ci_df)
+            if return_in_sample:
+                # 학습 구간 적합값 → in-sample 잔차
+                fc_in = fc.head(len(pdf))
+                in_resid = (np.asarray(y_data.values, dtype=float) - fc_in["yhat"].values).astype(float)
+                in_resid = in_resid[~np.isnan(in_resid)]
+                extras.append(in_resid)
+
+            if extras:
+                return (y_pred, *extras)
             return y_pred
+
+        # ──────────────────────────────────────
+        # In-sample 잔차 추출 헬퍼
+        # Hyndman, Forecasting: Principles and Practice §3.3, §5.4 정의
+        # ──────────────────────────────────────
+        def _compute_in_sample_residuals(forecaster, name, y, _hp=hp):
+            """학습된 forecaster로부터 학습 구간 in-sample 잔차(numpy array)를 추출.
+            실패 시 None 반환."""
+            try:
+                y_arr = np.asarray(y.values, dtype=float)
+
+                # AutoARIMA: statsmodels SARIMAXResults.resid 직접 사용 (one-step innovations)
+                if name == "AutoARIMA":
+                    pm = getattr(forecaster, "_forecaster", forecaster)
+                    arima_res = getattr(pm, "arima_res_", None)
+                    if arima_res is None and hasattr(pm, "model_"):
+                        arima_res = getattr(pm.model_, "arima_res_", None)
+                    if arima_res is not None:
+                        resid = np.asarray(arima_res.resid, dtype=float)
+                        return resid[~np.isnan(resid)]
+
+                # Naive: 전략별 textbook 정의 (Hyndman §3.3)
+                if name == "Naive":
+                    strategy = _hp.get("Naive_strategy", "last")
+                    if strategy == "last":
+                        # ŷ_t = y_{t-1}  →  e_t = y_t - y_{t-1}
+                        resid = y_arr[1:] - y_arr[:-1]
+                        return resid[~np.isnan(resid)]
+                    if strategy == "mean":
+                        # ŷ_t = mean(y_{1..t-1})  →  e_t = y_t - 누적평균
+                        cumsum = np.cumsum(y_arr)
+                        means = cumsum[:-1] / np.arange(1, len(y_arr))
+                        resid = y_arr[1:] - means
+                        return resid[~np.isnan(resid)]
+                    if strategy == "drift":
+                        # ŷ_t = y_{t-1} + (y_{t-1} - y_1)/(t-2)
+                        # 단순화: t=2부터 drift 계산
+                        n = len(y_arr)
+                        resid_list = []
+                        for t in range(2, n):
+                            slope = (y_arr[t-1] - y_arr[0]) / (t - 1)
+                            pred = y_arr[t-1] + slope
+                            resid_list.append(y_arr[t] - pred)
+                        return np.array(resid_list, dtype=float)
+
+                # SMA: ŷ_t = mean(y_{t-k..t-1})  →  e_t = y_t - rolling mean
+                if name == "SMA":
+                    window = int(_hp.get("SMA_window", 5))
+                    if len(y_arr) <= window:
+                        return None
+                    resid_list = []
+                    for t in range(window, len(y_arr)):
+                        pred = float(np.mean(y_arr[t-window:t]))
+                        resid_list.append(y_arr[t] - pred)
+                    return np.array(resid_list, dtype=float)
+
+                # STL: 학습 시 분해된 remainder(R_t)를 그대로 반환.
+                # Hyndman FPP3 §6.6: y_t = T_t + S_t + R_t, 적합값=T+S, 잔차=R.
+                # forecaster.predict(fh=전체훈련인덱스) 일반 fallback은 sktime 내부에서
+                # O(n²) 재예측이 발생하여 매우 느리므로 우회한다.
+                if name == "STL":
+                    resid_attr = getattr(forecaster, "resid_", None)
+                    if resid_attr is not None:
+                        resid = np.asarray(resid_attr, dtype=float)
+                        return resid[~np.isnan(resid)]
+
+                # ETS / Holt / HoltWinters / Theta 등:
+                # statsmodels 백엔드의 fittedvalues 우선 시도, 없으면 sktime predict
+                if hasattr(forecaster, "_fitted_forecaster"):
+                    inner = forecaster._fitted_forecaster
+                    fv = getattr(inner, "fittedvalues", None)
+                    if fv is not None:
+                        fv_arr = np.asarray(fv, dtype=float)
+                        if len(fv_arr) == len(y_arr):
+                            resid = y_arr - fv_arr
+                            return resid[~np.isnan(resid)]
+                    res = getattr(inner, "resid", None)
+                    if res is not None:
+                        res_arr = np.asarray(res, dtype=float)
+                        if len(res_arr) == len(y_arr):
+                            return res_arr[~np.isnan(res_arr)]
+
+                # 일반 sktime fallback: 학습 구간 fh로 in-sample 예측
+                from sktime.forecasting.base import ForecastingHorizon
+                fh_in = ForecastingHorizon(y.index, is_relative=False)
+                y_fit = forecaster.predict(fh=fh_in)
+                fit_arr = np.asarray(y_fit.values, dtype=float)
+                if len(fit_arr) != len(y_arr):
+                    return None
+                resid = y_arr - fit_arr
+                return resid[~np.isnan(resid)]
+            except Exception:
+                return None
+
+        # ──────────────────────────────────────
+        # 정보 기준(AIC/BIC/HQIC) + sigma2 추출
+        # FPP3 §8.6 (ETS) / §9.7 (ARIMA): likelihood 기반 모델만 정의됨.
+        # Naive/SMA/STL/Prophet은 likelihood 미정의 → 빈 dict 반환.
+        # ──────────────────────────────────────
+        def _extract_ic(forecaster, name, residuals_arr):
+            ic = {}
+            try:
+                if name == "AutoARIMA":
+                    pm = getattr(forecaster, "_forecaster", forecaster)
+                    ar = getattr(pm, "arima_res_", None)
+                    if ar is None and hasattr(pm, "model_"):
+                        ar = getattr(pm.model_, "arima_res_", None)
+                    if ar is not None:
+                        for k in ("aic", "bic", "hqic"):
+                            v = getattr(ar, k, None)
+                            try:
+                                vf = float(v)
+                                if np.isfinite(vf):
+                                    ic[k] = vf
+                            except (TypeError, ValueError):
+                                pass
+                        try:
+                            if "sigma2" in ar.params.index:
+                                ic["sigma2"] = float(ar.params["sigma2"])
+                        except Exception:
+                            pass
+                    return ic
+
+                # ETS-family + Theta: statsmodels 백엔드
+                inner = getattr(forecaster, "_fitted_forecaster", None)
+                if inner is not None:
+                    for k in ("aic", "bic", "hqic"):
+                        v = getattr(inner, k, None)
+                        try:
+                            vf = float(v)
+                            if np.isfinite(vf):
+                                ic[k] = vf
+                        except (TypeError, ValueError):
+                            pass
+                    # sigma2: statsmodels ETSResults는 sse/nobs 또는 .params['sigma2']
+                    sse = getattr(inner, "sse", None)
+                    nobs = getattr(inner, "nobs", None)
+                    try:
+                        if sse is not None and nobs is not None and float(nobs) > 1:
+                            ic["sigma2"] = float(sse) / float(nobs)
+                    except (TypeError, ValueError):
+                        pass
+
+                # 잔차 분산 fallback (모든 모델)
+                if "sigma2" not in ic and residuals_arr is not None and len(residuals_arr) > 1:
+                    ic["sigma2"] = float(np.var(residuals_arr, ddof=1))
+            except Exception:
+                pass
+            return ic
 
         # ──────────────────────────────────────
         # 모델별 최소 데이터 조건 체크
@@ -541,10 +818,6 @@ if uploaded_file is not None:
                 return n >= sp * 2
             if name == "Theta":
                 return n >= sp * 2
-            if name == "ARIMA":
-                return n >= _hp.get("ARIMA_p", 1) + _hp.get("ARIMA_d", 1) + 1
-            if name == "SARIMA":
-                return n >= sp * 2 + _hp.get("SARIMA_p", 1) + _hp.get("SARIMA_d", 1) + 1
             if name == "AutoARIMA":
                 return n >= sp * 2 + 1
             if name == "HoltWinters":
@@ -566,141 +839,278 @@ if uploaded_file is not None:
             predictions_future = {}
             intervals_future = {}
             metrics_results = []
+            fitted_arima = None  # AutoARIMA 적합 모델 보관 (잔차 진단용)
+            in_sample_residuals = {}  # 모델별 in-sample 잔차 (잔차 진단용)
+            in_sample_ic = {}  # 모델별 정보 기준 (AIC/BIC/HQIC/sigma2)
 
             if use_expanding:
-                spinner_msg = "Expanding Window Forecast 진행 중..."
+                mode_msg = "Expanding Window Forecast"
             elif use_rolling:
-                spinner_msg = "Rolling Window Forecast 진행 중..."
+                mode_msg = "Rolling Window Forecast"
             else:
-                spinner_msg = "모델 학습 중..."
-            with st.spinner(spinner_msg):
-                for name in selected_models:
-                    try:
-                        if not _check_min_data(name, len(y_train_m_clean)):
-                            st.warning(f"⚠️ {name} — 학습 데이터({len(y_train_m_clean)}개)가 최소 요구 조건에 부족하여 건너뜁니다.")
-                            continue
+                mode_msg = "모델 학습"
 
-                        if use_expanding or use_rolling:
-                            # ── Expanding / Rolling Window: 1-step 반복 예측 ──
-                            iter_preds = []
-                            mode_label = "Expanding" if use_expanding else "Rolling"
-                            progress_bar = st.progress(0, text=f"{name} {mode_label}...")
-                            for step in range(horizon):
+            total_models = len(selected_models)
+            # 진행 UI는 모델 설정 탭 안에서만 렌더 (다른 탭에 새지 않게)
+            overall_progress = tab_settings.progress(0.0, text=f"⏳ {mode_msg} 준비 중... (0/{total_models})")
+            train_start_time = time.time()
+
+            def _fmt_secs(s: float) -> str:
+                s = int(max(0, s))
+                if s >= 60:
+                    return f"{s // 60}분 {s % 60}초"
+                return f"{s}초"
+
+            # 진행률 ticker용 공유 상태 (메인 스레드 = 쓰기, 백그라운드 = 읽기)
+            ticker_state = {
+                "done": 0,
+                "name": selected_models[0] if selected_models else "",
+                "model_started_at": train_start_time,
+                "stop": False,
+            }
+
+            def _render_progress():
+                now = time.time()
+                elapsed_total = now - train_start_time
+                done = ticker_state["done"]
+                name_cur = ticker_state["name"]
+                model_started = ticker_state["model_started_at"]
+
+                if done >= total_models:
+                    overall_progress.progress(
+                        1.0,
+                        text=f"✅ 학습 완료 ({total_models}/{total_models}) · 총 소요 {_fmt_secs(elapsed_total)}",
+                    )
+                    return
+
+                if done == 0:
+                    pct = 0.0
+                    text = (
+                        f"⏳ [0%] {name_cur} 학습 중... (0/{total_models}) · "
+                        f"경과 {_fmt_secs(elapsed_total)}"
+                    )
+                else:
+                    avg_per_model = (model_started - train_start_time) / done
+                    elapsed_current = max(0.0, now - model_started)
+                    within = min(elapsed_current / avg_per_model, 0.99) if avg_per_model > 0 else 0.0
+                    pct = (done + within) / total_models
+                    text = (
+                        f"⏳ [{int(pct * 100)}%] {name_cur} 학습 중... "
+                        f"({done}/{total_models}) · 경과 {_fmt_secs(elapsed_total)}"
+                    )
+                overall_progress.progress(min(pct, 0.999), text=text)
+
+            def _ticker():
+                while not ticker_state["stop"]:
+                    try:
+                        _render_progress()
+                    except Exception:
+                        pass
+                    time.sleep(1.0)
+
+            ticker_thread = threading.Thread(target=_ticker, daemon=True)
+            add_script_run_ctx(ticker_thread)
+            ticker_thread.start()
+
+            for model_idx, name in enumerate(selected_models):
+                ticker_state["name"] = name
+                ticker_state["model_started_at"] = time.time()
+                _render_progress()
+                try:
+                    if not _check_min_data(name, len(y_train_m_clean)):
+                        tab_settings.warning(f"⚠️ {name} — 학습 데이터({len(y_train_m_clean)}개)가 최소 요구 조건에 부족하여 건너뜁니다.")
+                        continue
+
+                    if use_expanding or use_rolling:
+                        # ── Expanding / Rolling Window: 1-step 반복 예측 ──
+                        iter_preds = []
+                        mode_label = "Expanding" if use_expanding else "Rolling"
+                        progress_bar = tab_settings.progress(0, text=f"{name} {mode_label}...")
+                        for step in range(horizon):
+                            if use_expanding:
+                                y_window = y_m_clean.iloc[:train_size + step]
+                            else:
+                                y_window = y_m_clean.iloc[step:train_size + step]
+                            if not _check_min_data(name, len(y_window)):
+                                iter_preds.append(np.nan)
+                                progress_bar.progress((step + 1) / horizon)
+                                continue
+                            if name == "Prophet":
+                                # Prophet은 DatetimeIndex 필요 — 원본 y에서 동일 범위 슬라이스
                                 if use_expanding:
-                                    y_window = y_m_clean.iloc[:train_size + step]
+                                    y_window_dt = y.iloc[:train_size + step]
                                 else:
-                                    y_window = y_m_clean.iloc[step:train_size + step]
-                                if not _check_min_data(name, len(y_window)):
+                                    y_window_dt = y.iloc[step:train_size + step]
+                                pred_1 = _prophet_fit_predict(y_window_dt, 1)
+                                iter_preds.append(pred_1.values[0])
+                            elif name == "HoltWinters":
+                                forecaster = _build_holtwinters(y_window)
+                                if forecaster is None:
                                     iter_preds.append(np.nan)
                                     progress_bar.progress((step + 1) / horizon)
                                     continue
-                                if name == "Prophet":
-                                    # Prophet은 DatetimeIndex 필요 — 원본 y에서 동일 범위 슬라이스
-                                    if use_expanding:
-                                        y_window_dt = y.iloc[:train_size + step]
-                                    else:
-                                        y_window_dt = y.iloc[step:train_size + step]
-                                    pred_1 = _prophet_fit_predict(y_window_dt, 1)
-                                    iter_preds.append(pred_1.values[0])
-                                elif name == "HoltWinters":
-                                    forecaster = _build_holtwinters(y_window)
-                                    if forecaster is None:
-                                        iter_preds.append(np.nan)
-                                        progress_bar.progress((step + 1) / horizon)
-                                        continue
-                                    pred_1 = forecaster.predict(fh=[1])
-                                    iter_preds.append(pred_1.values[0])
-                                else:
-                                    forecaster = model_factories[name]()
-                                    forecaster.fit(y_window)
-                                    pred_1 = forecaster.predict(fh=[1])
-                                    iter_preds.append(pred_1.values[0])
-                                progress_bar.progress((step + 1) / horizon)
-                            progress_bar.empty()
-
-                            if all(np.isnan(v) for v in iter_preds):
-                                st.warning(f"⚠️ {name} {mode_label} Forecast 실패 — 모든 스텝에서 데이터 부족")
-                                continue
-
-                            y_pred_test = pd.Series(iter_preds, index=y_test.index, name=target_col).interpolate()
-                        else:
-                            # ── 기본: 한 번에 전체 예측 ──
-                            if name == "Prophet":
-                                y_pred_test = _prophet_fit_predict(y_train, horizon)
-                                y_pred_test.index = y_test.index
-                            elif name == "HoltWinters":
-                                forecaster = _build_holtwinters(y_train_m_clean)
-                                if forecaster is None:
-                                    st.warning(f"⚠️ {name} 모델 학습 실패")
-                                    continue
-                                y_pred_test = forecaster.predict(fh=fh)
-                                y_pred_test.index = y_test.index
+                                pred_1 = forecaster.predict(fh=[1])
+                                iter_preds.append(pred_1.values[0])
+                            elif name == "Theta":
+                                forecaster = _build_theta(y_window)
+                                pred_1 = forecaster.predict(fh=[1])
+                                iter_preds.append(pred_1.values[0])
                             else:
                                 forecaster = model_factories[name]()
-                                forecaster.fit(y_train_m_clean)
-                                y_pred_test = forecaster.predict(fh=fh)
-                                y_pred_test.index = y_test.index
+                                forecaster.fit(y_window)
+                                pred_1 = forecaster.predict(fh=[1])
+                                iter_preds.append(pred_1.values[0])
+                            progress_bar.progress((step + 1) / horizon)
+                        progress_bar.empty()
 
-                        predictions_test[name] = y_pred_test
+                        if all(np.isnan(v) for v in iter_preds):
+                            tab_settings.warning(f"⚠️ {name} {mode_label} Forecast 실패 — 모든 스텝에서 데이터 부족")
+                            continue
 
-                        rmse = root_mean_squared_error(y_test, y_pred_test)
-                        mae = mean_absolute_error(y_test, y_pred_test)
-                        mse = mean_squared_error(y_test, y_pred_test)
-                        mape = mean_absolute_percentage_error(y_test, y_pred_test, symmetric=False)
-                        mase = mean_absolute_scaled_error(y_test, y_pred_test, y_train=y_train)
-
-                        # 편향 진단: RSFE(누적 오차) 및 TS(Tracking Signal)
-                        errors = y_test.values - y_pred_test.values
-                        rsfe = float(np.sum(errors))
-                        ts = float(rsfe / mae) if mae > 0 else 0.0
-
-                        # MdRAE: naive(마지막 관측치 유지) 벤치마크 대비 상대오차의 중앙값
-                        naive_pred = np.full_like(y_test.values, y_train.iloc[-1], dtype=float)
-                        naive_errors = y_test.values - naive_pred
-                        denom = np.where(np.abs(naive_errors) < 1e-10, 1e-10, np.abs(naive_errors))
-                        mdrae = float(np.median(np.abs(errors) / denom))
-
-                        metrics_results.append({
-                            "Model": name, "MSE": mse, "RMSE": rmse, "MAE": mae,
-                            "MAPE(%)": mape * 100, "MASE": mase,
-                            "MdRAE": mdrae, "RSFE": rsfe, "TS": ts,
-                        })
-
-                        # 전체 데이터로 재학습 → 미래 예측
+                        y_pred_test = pd.Series(iter_preds, index=y_test.index, name=target_col).interpolate()
+                    else:
+                        # ── 기본: 한 번에 전체 예측 ──
                         if name == "Prophet":
-                            if show_ci:
-                                y_fut, ci_prophet = _prophet_fit_predict(y, horizon, return_ci=True)
-                                intervals_future[name] = ci_prophet
-                            else:
-                                y_fut = _prophet_fit_predict(y, horizon)
-                            predictions_future[name] = y_fut
+                            y_pred_test = _prophet_fit_predict(y_train, horizon)
+                            y_pred_test.index = y_test.index
                         elif name == "HoltWinters":
-                            forecaster2 = _build_holtwinters(y_m_clean)
-                            if forecaster2 is None:
+                            forecaster = _build_holtwinters(y_train_m_clean)
+                            if forecaster is None:
+                                tab_settings.warning(f"⚠️ {name} 모델 학습 실패")
                                 continue
-                            y_fut = forecaster2.predict(fh=fh)
-                            if hasattr(y_fut.index, 'to_timestamp'):
-                                y_fut.index = y_fut.index.to_timestamp()
-                            predictions_future[name] = y_fut
+                            y_pred_test = forecaster.predict(fh=fh)
+                            y_pred_test.index = y_test.index
+                        elif name == "Theta":
+                            forecaster = _build_theta(y_train_m_clean)
+                            y_pred_test = forecaster.predict(fh=fh)
+                            y_pred_test.index = y_test.index
                         else:
-                            forecaster2 = model_factories[name]()
-                            forecaster2.fit(y_m_clean)
-                            y_fut = forecaster2.predict(fh=fh)
-                            if hasattr(y_fut.index, 'to_timestamp'):
-                                y_fut.index = y_fut.index.to_timestamp()
-                            predictions_future[name] = y_fut
+                            forecaster = model_factories[name]()
+                            forecaster.fit(y_train_m_clean)
+                            y_pred_test = forecaster.predict(fh=fh)
+                            y_pred_test.index = y_test.index
 
-                            if show_ci and name in INTERVAL_CAPABLE:
-                                try:
-                                    ci = forecaster2.predict_interval(fh=fh, coverage=0.9)
-                                    if hasattr(ci.index, 'to_timestamp'):
-                                        ci.index = ci.index.to_timestamp()
-                                    intervals_future[name] = ci
-                                except Exception:
-                                    pass
+                    predictions_test[name] = y_pred_test
 
-                    except Exception as e:
-                        st.warning(f"⚠️ {name} 모델 실행 오류: {e}")
+                    rmse = root_mean_squared_error(y_test, y_pred_test)
+                    mae = mean_absolute_error(y_test, y_pred_test)
+                    mse = mean_squared_error(y_test, y_pred_test)
+                    mape = mean_absolute_percentage_error(y_test, y_pred_test, symmetric=False)
+                    mase = mean_absolute_scaled_error(y_test, y_pred_test, y_train=y_train)
+
+                    # 편향 진단: RSFE(누적 오차) 및 TS(Tracking Signal)
+                    errors = y_test.values - y_pred_test.values
+                    rsfe = float(np.sum(errors))
+                    ts = float(rsfe / mae) if mae > 0 else 0.0
+
+                    # MdRAE: naive(마지막 관측치 유지) 벤치마크 대비 상대오차의 중앙값
+                    naive_pred = np.full_like(y_test.values, y_train.iloc[-1], dtype=float)
+                    naive_errors = y_test.values - naive_pred
+                    denom = np.where(np.abs(naive_errors) < 1e-10, 1e-10, np.abs(naive_errors))
+                    mdrae = float(np.median(np.abs(errors) / denom))
+
+                    metrics_results.append({
+                        "Model": name, "MSE": mse, "RMSE": rmse, "MAE": mae,
+                        "MAPE(%)": mape * 100, "MASE": mase,
+                        "MdRAE": mdrae, "RSFE": rsfe, "TS": ts,
+                    })
+
+                    # 전체 데이터로 재학습 → 미래 예측 + in-sample 잔차
+                    if name == "Prophet":
+                        if show_ci:
+                            y_fut, ci_prophet, in_resid_p = _prophet_fit_predict(
+                                y, horizon, return_ci=True, return_in_sample=True,
+                            )
+                            intervals_future[name] = ci_prophet
+                        else:
+                            y_fut, in_resid_p = _prophet_fit_predict(
+                                y, horizon, return_in_sample=True,
+                            )
+                        predictions_future[name] = y_fut
+                        _prophet_resid = (
+                            np.asarray(in_resid_p, dtype=float)
+                            if in_resid_p is not None and len(in_resid_p) > 0
+                            else None
+                        )
+                        if _prophet_resid is not None:
+                            in_sample_residuals[name] = _prophet_resid
+                        # Prophet은 likelihood 기반 IC 미정의 → sigma2(잔차 분산)만 fallback
+                        _ic = _extract_ic(None, name, _prophet_resid)
+                        if _ic:
+                            in_sample_ic[name] = _ic
+                    elif name == "HoltWinters":
+                        forecaster2 = _build_holtwinters(y_m_clean)
+                        if forecaster2 is None:
+                            continue
+                        y_fut = forecaster2.predict(fh=fh)
+                        if hasattr(y_fut.index, 'to_timestamp'):
+                            y_fut.index = y_fut.index.to_timestamp()
+                        predictions_future[name] = y_fut
+
+                        in_resid = _compute_in_sample_residuals(forecaster2, name, y_m_clean)
+                        if in_resid is not None and len(in_resid) > 0:
+                            in_sample_residuals[name] = in_resid
+                        _ic = _extract_ic(forecaster2, name, in_resid)
+                        if _ic:
+                            in_sample_ic[name] = _ic
+                    elif name == "Theta":
+                        forecaster2 = _build_theta(y_m_clean)
+                        y_fut = forecaster2.predict(fh=fh)
+                        if hasattr(y_fut.index, 'to_timestamp'):
+                            y_fut.index = y_fut.index.to_timestamp()
+                        predictions_future[name] = y_fut
+
+                        in_resid = _compute_in_sample_residuals(forecaster2, name, y_m_clean)
+                        if in_resid is not None and len(in_resid) > 0:
+                            in_sample_residuals[name] = in_resid
+                        _ic = _extract_ic(forecaster2, name, in_resid)
+                        if _ic:
+                            in_sample_ic[name] = _ic
+
+                        if show_ci:
+                            try:
+                                ci = forecaster2.predict_interval(fh=fh, coverage=0.9)
+                                if hasattr(ci.index, 'to_timestamp'):
+                                    ci.index = ci.index.to_timestamp()
+                                intervals_future[name] = ci
+                            except Exception:
+                                pass
+                    else:
+                        forecaster2 = model_factories[name]()
+                        forecaster2.fit(y_m_clean)
+                        y_fut = forecaster2.predict(fh=fh)
+                        if hasattr(y_fut.index, 'to_timestamp'):
+                            y_fut.index = y_fut.index.to_timestamp()
+                        predictions_future[name] = y_fut
+
+                        if name == "AutoARIMA":
+                            fitted_arima = forecaster2
+
+                        in_resid = _compute_in_sample_residuals(forecaster2, name, y_m_clean)
+                        if in_resid is not None and len(in_resid) > 0:
+                            in_sample_residuals[name] = in_resid
+                        _ic = _extract_ic(forecaster2, name, in_resid)
+                        if _ic:
+                            in_sample_ic[name] = _ic
+
+                        if show_ci and name in INTERVAL_CAPABLE:
+                            try:
+                                ci = forecaster2.predict_interval(fh=fh, coverage=0.9)
+                                if hasattr(ci.index, 'to_timestamp'):
+                                    ci.index = ci.index.to_timestamp()
+                                intervals_future[name] = ci
+                            except Exception:
+                                pass
+
+                except Exception as e:
+                    tab_settings.warning(f"⚠️ {name} 모델 실행 오류: {e}")
+                finally:
+                    ticker_state["done"] = model_idx + 1
+
+            # ticker 정지 후 최종 100% 렌더
+            ticker_state["stop"] = True
+            ticker_thread.join(timeout=2.0)
+            _render_progress()
 
             # 학습 결과를 세션에 저장
             st.session_state.trained = True
@@ -710,13 +1120,28 @@ if uploaded_file is not None:
                 "predictions_future": predictions_future,
                 "intervals_future": intervals_future,
                 "metrics_results": metrics_results,
+                "fitted_arima": fitted_arima,
+                "in_sample_residuals": in_sample_residuals,
+                "in_sample_ic": in_sample_ic,
             }
-        else:
+        elif st.session_state.trained:
             # 기존 결과 로드
             predictions_test = st.session_state.train_results["predictions_test"]
             predictions_future = st.session_state.train_results["predictions_future"]
             intervals_future = st.session_state.train_results["intervals_future"]
             metrics_results = st.session_state.train_results["metrics_results"]
+            fitted_arima = st.session_state.train_results.get("fitted_arima")
+            in_sample_residuals = st.session_state.train_results.get("in_sample_residuals", {})
+            in_sample_ic = st.session_state.train_results.get("in_sample_ic", {})
+        else:
+            # 학습 전 — 빈 상태로 초기화 (결과 탭들이 NameError 없이 렌더되도록)
+            predictions_test = {}
+            predictions_future = {}
+            intervals_future = {}
+            metrics_results = []
+            fitted_arima = None
+            in_sample_residuals = {}
+            in_sample_ic = {}
 
         # ============================================================
         # 탭 3: 모델별 예측
@@ -857,14 +1282,11 @@ if uploaded_file is not None:
                 st.caption(f"예측 방식: {_mode_short2} | 주기: {freq_txt} | Horizon: {horizon}스텝({horizon}{freq_txt}) | 평가 모델: {len(metrics_results)}개")
 
                 df_metrics = pd.DataFrame(metrics_results).reset_index(drop=True)
-                # 전체 평가 지표 8개 (RSFE, TS는 절대값 기준으로 순위/정규화)
-                metric_names = ["MSE", "RMSE", "MAE", "MAPE(%)", "MASE", "MdRAE", "RSFE", "TS"]
-                bias_names = ["RSFE", "TS"]
+                # 성능 평가 지표 6개 (RSFE, TS는 편향 진단 전용으로 분리)
+                metric_names = ["MSE", "RMSE", "MAE", "MAPE(%)", "MASE", "MdRAE"]
 
-                # 순위 계산용 데이터 — RSFE, TS는 |값| 사용 (0에 가까울수록 우수)
+                # 순위 계산용 데이터 (낮을수록 우수)
                 rank_input = df_metrics.set_index("Model")[metric_names].copy()
-                for c in bias_names:
-                    rank_input[c] = rank_input[c].abs()
                 rank_df = rank_input.rank()
                 rank_df["평균 순위"] = rank_df.mean(axis=1)
                 rank_df = rank_df.sort_values("평균 순위")
@@ -889,11 +1311,11 @@ if uploaded_file is not None:
                 # ── 1) 지표별 Bar Chart ──
                 st.subheader("📈 지표별 모델 비교")
                 fig_bars = make_subplots(
-                    rows=2, cols=4,
+                    rows=2, cols=3,
                     subplot_titles=metric_names,
-                    horizontal_spacing=0.06, vertical_spacing=0.18,
+                    horizontal_spacing=0.08, vertical_spacing=0.18,
                 )
-                positions = [(1, 1), (1, 2), (1, 3), (1, 4), (2, 1), (2, 2), (2, 3), (2, 4)]
+                positions = [(1, 1), (1, 2), (1, 3), (2, 1), (2, 2), (2, 3)]
                 for m_idx, metric in enumerate(metric_names):
                     r, c = positions[m_idx]
                     for _, row in df_metrics.iterrows():
@@ -913,15 +1335,12 @@ if uploaded_file is not None:
 
                 # ── 2) 히트맵 (모델 × 지표 정규화) ──
                 st.subheader("🗺️ 모델별 성능 히트맵")
-                st.caption("각 지표를 0~1로 정규화 (낮을수록 우수 → 진한 초록). RSFE·TS는 |값| 기준.")
+                st.caption("각 지표를 0~1로 정규화 (낮을수록 우수 → 진한 초록).")
                 heat_data = df_metrics.set_index("Model")[metric_names].copy()
-                heat_norm_src = heat_data.copy()
-                for c in bias_names:
-                    heat_norm_src[c] = heat_norm_src[c].abs()
-                heat_norm = heat_norm_src.copy()
+                heat_norm = heat_data.copy()
                 for col in metric_names:
-                    min_v, max_v = heat_norm_src[col].min(), heat_norm_src[col].max()
-                    heat_norm[col] = 0.0 if max_v == min_v else (heat_norm_src[col] - min_v) / (max_v - min_v)
+                    min_v, max_v = heat_data[col].min(), heat_data[col].max()
+                    heat_norm[col] = 0.0 if max_v == min_v else (heat_data[col] - min_v) / (max_v - min_v)
                 fig_heat = go.Figure(go.Heatmap(
                     z=heat_norm.values,
                     x=metric_names,
@@ -945,11 +1364,9 @@ if uploaded_file is not None:
                 st.subheader("📊 모델 순위 변동 차트")
                 st.caption("각 지표마다 모델이 몇 등인지 선으로 이어 보여줍니다. 위쪽일수록 우수 (1등). 선이 출렁이면 그 모델은 지표마다 강약이 갈린다는 뜻.")
 
-                bump_metrics = metric_names  # 전체 8개 지표
-                # 지표별 순위 계산 (RSFE, TS는 |값| 기준, 나머지는 값이 낮을수록 우수)
+                bump_metrics = metric_names  # 성능 평가 6개 지표
+                # 지표별 순위 계산 (값이 낮을수록 우수)
                 bump_src = df_metrics.set_index("Model")[bump_metrics].copy()
-                for c in bias_names:
-                    bump_src[c] = bump_src[c].abs()
                 bump_ranks = bump_src.rank(method="min", ascending=True)
                 bump_models = bump_ranks.index.tolist()
                 n_bump_models = len(bump_models)
@@ -1022,7 +1439,7 @@ if uploaded_file is not None:
                 # ── 편향 진단 (RSFE / TS) ──
                 st.subheader("⚖️ 편향 진단 (RSFE / TS)")
                 st.caption("RSFE = Σ(실제 − 예측). 양수면 과소예측, 음수면 과대예측. TS = RSFE / MAE, |TS| > 4 이면 편향 의심.")
-                bias_df = df_metrics[["Model"] + bias_names].copy()
+                bias_df = df_metrics[["Model", "RSFE", "TS"]].copy()
                 bias_df["편향 판정"] = bias_df["TS"].apply(
                     lambda t: "✗ 편향 의심" if abs(t) > 4 else ("⚠ 주의" if abs(t) > 2 else "✓ 양호")
                 )
@@ -1046,7 +1463,7 @@ if uploaded_file is not None:
 
                 # ── 성능 테이블 (성능순 정렬 + 금은동) ──
                 st.subheader("📋 성능 지표 상세 테이블")
-                df_table = df_metrics.copy()
+                df_table = df_metrics.drop(columns=["RSFE", "TS"]).copy()
                 df_table["평균 순위"] = rank_df.reindex(df_table["Model"])["평균 순위"].values
                 df_table = df_table.sort_values("평균 순위").reset_index(drop=True)
                 df_table.insert(0, "순위", range(1, len(df_table) + 1))
@@ -1071,6 +1488,335 @@ if uploaded_file is not None:
                 )
                 st.dataframe(metrics_style, hide_index=True, use_container_width=True)
 
+                # ── 잔차 진단 ──
+                st.markdown("---")
+                st.subheader("🔍 잔차 진단")
+                st.caption("선택한 모델의 잔차를 분석합니다. 잔차가 백색잡음에 가까울수록 모델이 시계열 구조를 잘 파악한 것.")
+
+                # 진단 결과 해석 블록에서 사용 — predictions_test 분기와 무관하게 항상 정의되어 있어야 함
+                residuals = None
+                resid_model = None
+                arima_res = None
+                lb_lag = 1
+
+                if predictions_test:
+                    # in-sample 잔차가 추출된 모델만 선택 가능
+                    _resid_keys = [k for k in predictions_test.keys() if k in in_sample_residuals]
+                    if not _resid_keys:
+                        st.warning("in-sample 잔차를 추출할 수 있는 모델이 없습니다.")
+                        residuals = None
+                        resid_model = None
+                        arima_res = None
+                    else:
+                        _default_idx = _resid_keys.index("AutoARIMA") if "AutoARIMA" in _resid_keys else 0
+                        resid_model = st.selectbox(
+                            "진단할 모델 선택",
+                            _resid_keys,
+                            index=_default_idx,
+                            key="resid_model_select",
+                        )
+
+                        residuals = np.asarray(in_sample_residuals[resid_model], dtype=float)
+                        residuals = residuals[~np.isnan(residuals)]
+                        lb_lag = 1
+
+                        # AutoARIMA는 SARIMAX summary 출력용 arima_res 도 추출
+                        arima_res = None
+                        if resid_model == "AutoARIMA" and fitted_arima is not None:
+                            pm = getattr(fitted_arima, "_forecaster", fitted_arima)
+                            arima_res = getattr(pm, "arima_res_", None)
+                            if arima_res is None and hasattr(pm, "model_"):
+                                arima_res = getattr(pm.model_, "arima_res_", None)
+
+                    # 1) 잔차 ACF / PACF
+                    if residuals is not None and len(residuals) >= 5:
+                        try:
+                            from statsmodels.tsa.stattools import acf as _acf_r, pacf as _pacf_r
+                            nlags_r = min(20, max(2, len(residuals) // 2 - 1))
+                            acf_r_vals = _acf_r(residuals, nlags=nlags_r)
+                            pacf_r_vals = _pacf_r(residuals, nlags=nlags_r)
+                            ci_r = 1.96 / np.sqrt(len(residuals))
+
+                            fig_resid_acf = make_subplots(
+                                rows=1, cols=2,
+                                subplot_titles=["잔차 ACF", "잔차 PACF"],
+                                horizontal_spacing=0.1,
+                            )
+                            for i, v in enumerate(acf_r_vals):
+                                fig_resid_acf.add_trace(go.Scatter(
+                                    x=[i, i], y=[0, v], mode="lines",
+                                    line=dict(color="#636EFA", width=1.5),
+                                    showlegend=False, hoverinfo="skip",
+                                ), row=1, col=1)
+                            fig_resid_acf.add_trace(go.Scatter(
+                                x=list(range(len(acf_r_vals))), y=acf_r_vals,
+                                mode="markers", marker=dict(color="#636EFA", size=6),
+                                showlegend=False,
+                                hovertemplate="lag %{x}: %{y:.3f}<extra></extra>",
+                            ), row=1, col=1)
+                            for i, v in enumerate(pacf_r_vals):
+                                fig_resid_acf.add_trace(go.Scatter(
+                                    x=[i, i], y=[0, v], mode="lines",
+                                    line=dict(color="#EF553B", width=1.5),
+                                    showlegend=False, hoverinfo="skip",
+                                ), row=1, col=2)
+                            fig_resid_acf.add_trace(go.Scatter(
+                                x=list(range(len(pacf_r_vals))), y=pacf_r_vals,
+                                mode="markers", marker=dict(color="#EF553B", size=6),
+                                showlegend=False,
+                                hovertemplate="lag %{x}: %{y:.3f}<extra></extra>",
+                            ), row=1, col=2)
+                            for col_idx in [1, 2]:
+                                fig_resid_acf.add_shape(
+                                    type="rect", xref=f"x{col_idx}", yref=f"y{col_idx}",
+                                    x0=0, x1=nlags_r, y0=-ci_r, y1=ci_r,
+                                    fillcolor="rgba(150,150,150,0.18)", line_width=0, layer="below",
+                                )
+                                fig_resid_acf.add_hline(y=0, line=dict(color="black", width=0.5), row=1, col=col_idx)
+                            fig_resid_acf.update_yaxes(range=[-1.05, 1.05])
+                            fig_resid_acf.update_xaxes(title_text="Lag")
+                            fig_resid_acf.update_layout(
+                                height=300, template="plotly_white",
+                                margin=dict(l=50, r=20, t=40, b=30),
+                            )
+                            st.plotly_chart(fig_resid_acf, use_container_width=True)
+                        except Exception as e:
+                            st.warning(f"잔차 ACF/PACF 계산 실패: {e}")
+
+                    # 3) AutoARIMA: statsmodels SARIMAX summary 그대로 출력 (textbook 표준 reference)
+                    #    그 외 모델의 잔차 검정은 아래 "📖 진단 결과 해석" 블록에서 일괄 처리.
+                    if arima_res is not None:
+                        try:
+                            st.text(str(arima_res.summary()))
+                        except Exception as e:
+                            st.warning(f"ARIMA summary 출력 실패: {e}")
+                else:
+                    st.info("학습된 모델이 없어 잔차 진단을 표시할 수 없습니다.")
+
+                # ── 진단 결과 해석 (본 실행 계산값 기반) ──
+                if residuals is not None and len(residuals) >= 5:
+                    st.markdown("##### 📖 진단 결과 해석")
+
+                    _n_r = len(residuals)
+
+                    try:
+                        from statsmodels.stats.diagnostic import acorr_ljungbox as _interp_lb, het_arch as _interp_arch
+                        from scipy.stats import jarque_bera as _interp_jb, skew as _interp_sk, kurtosis as _interp_ku
+
+                        # p-value 표시: 매우 작은 값(< 1e-4)은 "< 0.0001"로 표기 (0.0000으로 보이는 것 방지)
+                        def _fp(p):
+                            if not np.isfinite(p):
+                                return "—"
+                            if p < 1e-4:
+                                return "< 0.0001"
+                            return f"{p:.4f}"
+
+                        # 2자리 표기 (Ljung-Box·Hetero·JB 등 — 반올림 후 0.00이면 "< 0.01")
+                        def _fp2(p):
+                            if not np.isfinite(p):
+                                return "—"
+                            if round(p, 2) < 0.01:
+                                return "< 0.01"
+                            return f"{round(p, 2):.2f}"
+
+                        # 2자리 반올림 (판정 비교용 — 표시값과 동일한 수치로 비교)
+                        def _r2(x):
+                            return x if not np.isfinite(x) else round(x, 2)
+
+                        # Ljung-Box: AutoARIMA는 SARIMAX standardized residuals 기반 (summary와 동일)
+                        # 그 외 모델은 raw 잔차에 acorr_ljungbox (burn-in 영향 없음)
+                        if arima_res is not None:
+                            _lb_arr = arima_res.test_serial_correlation(
+                                method="ljungbox", lags=int(lb_lag),
+                            )
+                            # shape = (k_endog, 2, n_lags). [0,0,-1] = lag=lb_lag Q stat, [0,1,-1] = p-value
+                            _lb_q = float(_lb_arr[0, 0, -1])
+                            _lb_pv = float(_lb_arr[0, 1, -1])
+                        else:
+                            _lb_df = _interp_lb(residuals, lags=[int(lb_lag)], return_df=True)
+                            _lb_q = float(_lb_df["lb_stat"].iloc[0])
+                            _lb_pv = float(_lb_df["lb_pvalue"].iloc[0])
+
+                        # Jarque-Bera·skew·kurt: AutoARIMA는 standardized residuals 기반 (summary와 동일)
+                        if arima_res is not None:
+                            _norm_arr = arima_res.test_normality(method="jarquebera")
+                            # shape = (k_endog, 4): [jb, jbpv, skew, kurt(raw)]
+                            _jb_q = float(_norm_arr[0, 0])
+                            _jb_pv = float(_norm_arr[0, 1])
+                            _sk_v = float(_norm_arr[0, 2])
+                            _ku_v = float(_norm_arr[0, 3])
+                        else:
+                            _jb_q, _jb_pv = _interp_jb(residuals)
+                            _jb_q = float(_jb_q); _jb_pv = float(_jb_pv)
+                            _sk_v = float(_interp_sk(residuals))
+                            _ku_v = float(_interp_ku(residuals, fisher=False))
+
+                        # Heteroskedasticity: AutoARIMA는 breakvar (summary의 H 통계량과 동일),
+                        # 그 외 모델은 ARCH-LM (raw 잔차)
+                        _het_ok = False
+                        _het_label = None
+                        _het_stat = None
+                        _het_pv = None
+                        if arima_res is not None:
+                            try:
+                                _het_arr = arima_res.test_heteroskedasticity(method="breakvar")
+                                # shape = (k_endog, 2): [stat, pvalue]. p-value는 two-sided.
+                                _het_stat = float(_het_arr[0, 0])
+                                _het_pv = float(_het_arr[0, 1])
+                                _het_label = "Heteroskedasticity"
+                                _het_ok = True
+                            except Exception:
+                                pass
+                        else:
+                            try:
+                                _arch_lag_i = min(12, max(1, _n_r // 5))
+                                _arch_q, _arch_pv, _, _ = _interp_arch(residuals, nlags=_arch_lag_i)
+                                _het_stat = float(_arch_q)
+                                _het_pv = float(_arch_pv)
+                                _het_label = "Heteroskedasticity"
+                                _het_ok = True
+                            except Exception:
+                                pass
+
+                        interp_rows = []
+
+                        # 정보 기준 (likelihood 기반 모델만): ARIMA + ETS-family + Theta
+                        # FPP3 §8.6 (ETS), §9.7 (ARIMA). Naive/SMA/STL/Prophet은 미정의 → 행 생략.
+                        _ic = in_sample_ic.get(resid_model, {}) if in_sample_ic else {}
+                        if "aic" in _ic:
+                            interp_rows.append({
+                                "검정·통계": "AIC",
+                                "값": f"{_ic['aic']:.2f}",
+                                "해석·판정": "정보 기준 — 절댓값만으로는 판단 불가. 동일 모델군 후보 간 비교 시 낮을수록 좋음.",
+                            })
+                        if "bic" in _ic:
+                            interp_rows.append({
+                                "검정·통계": "BIC",
+                                "값": f"{_ic['bic']:.2f}",
+                                "해석·판정": "AIC보다 복잡도 페널티 강함. 표본이 클수록 단순 모델 선호. 모델 비교용.",
+                            })
+                        if "hqic" in _ic:
+                            interp_rows.append({
+                                "검정·통계": "HQIC",
+                                "값": f"{_ic['hqic']:.2f}",
+                                "해석·판정": "AIC와 BIC의 중간 페널티. 모델 비교용.",
+                            })
+                        if "sigma2" in _ic:
+                            _sig = _ic["sigma2"]
+                            interp_rows.append({
+                                "검정·통계": "sigma2",
+                                "값": f"{_sig:.4f}",
+                                "해석·판정": f"모델이 설명하지 못한 변동의 분산 (잔차 표준편차 ≈ {_sig**0.5:.4f}). 동일 모델군 후보 간 비교 시 작을수록 적합 양호.",
+                            })
+
+                        # AutoARIMA 한정 — 계수 (intercept, ar*, ma*) + p-value
+                        if arima_res is not None:
+                            for _coef_name in arima_res.params.index:
+                                if _coef_name == "sigma2":
+                                    continue  # 위 통합 sigma2 행으로 이미 표시됨
+                                _coef_val = float(arima_res.params[_coef_name])
+                                _coef_p = float(arima_res.pvalues.get(_coef_name, np.nan))
+                                if np.isnan(_coef_p):
+                                    _coef_verdict = "p-value 산출 불가."
+                                elif _coef_p < 0.05:
+                                    _coef_verdict = f"✓ p = {_fp(_coef_p)} < 0.05 → 5% 수준에서 통계적으로 유의."
+                                else:
+                                    _coef_verdict = f"⚠ p = {_fp(_coef_p)} ≥ 0.05 → 5% 수준에서 비유의 (제거 후보)."
+                                interp_rows.append({
+                                    "검정·통계": _coef_name,
+                                    "값": f"{_coef_val:+.4f}",
+                                    "해석·판정": _coef_verdict,
+                                })
+
+                        # 모든 모델 공통 — 잔차 검정
+                        # Ljung-Box (선택 lag) — AutoARIMA는 SARIMAX summary와 동일 검정
+                        _lb_pv_r = _r2(_lb_pv)
+                        if _lb_pv_r > 0.05:
+                            _lb_verdict = f"✓ p = {_fp2(_lb_pv)} > 0.05 → lag-{int(lb_lag)} 자기상관 없음 (백색잡음 가설 채택)."
+                        else:
+                            _lb_verdict = f"✗ p = {_fp2(_lb_pv)} ≤ 0.05 → lag-{int(lb_lag)} 자기상관 잔존 (백색잡음 기각)."
+                        interp_rows.append({
+                            "검정·통계": "Ljung-Box",
+                            "값": f"{_lb_q:.2f}, p = {_fp2(_lb_pv)}",
+                            "해석·판정": _lb_verdict,
+                        })
+
+                        if _het_ok:
+                            _het_pv_r = _r2(_het_pv)
+                            if _het_pv_r > 0.05:
+                                _het_verdict = f"✓ p = {_fp2(_het_pv)} > 0.05 → 등분산 (분산이 시간에 따라 안정적)."
+                            else:
+                                _het_verdict = f"✗ p = {_fp2(_het_pv)} ≤ 0.05 → 이분산 (변동성 군집 가능, 신뢰구간 정확도 저하 우려)."
+                            interp_rows.append({
+                                "검정·통계": _het_label,
+                                "값": f"{_het_stat:.2f}, p = {_fp2(_het_pv)}",
+                                "해석·판정": _het_verdict,
+                            })
+                        else:
+                            interp_rows.append({
+                                "검정·통계": "Heteroskedasticity",
+                                "값": "—",
+                                "해석·판정": "계산 불가 (표본 부족 또는 수렴 실패).",
+                            })
+
+                        _jb_pv_r = _r2(_jb_pv)
+                        if _jb_pv_r > 0.05:
+                            _jb_verdict = f"✓ p = {_fp2(_jb_pv)} > 0.05 → 정규성 만족 (잔차가 정규분포에 근접)."
+                        else:
+                            _jb_verdict = f"✗ p = {_fp2(_jb_pv)} ≤ 0.05 → 정규성 위배 (신뢰구간·예측구간 정확도 저하 우려)."
+                        interp_rows.append({
+                            "검정·통계": "Jarque-Bera",
+                            "값": f"{_jb_q:.2f}, p = {_fp2(_jb_pv)}",
+                            "해석·판정": _jb_verdict,
+                        })
+
+                        _sk_v_r = _r2(_sk_v)
+                        _abs_sk_r = abs(_sk_v_r)
+                        if _abs_sk_r < 0.5:
+                            _sk_verdict = f"✓ |왜도| = {_abs_sk_r:.2f} < 0.5 → 분포 대칭."
+                        elif _abs_sk_r < 1:
+                            _sk_verdict = f"⚠ |왜도| = {_abs_sk_r:.2f} (0.5 ≤ |왜도| < 1) → 약한 비대칭."
+                        else:
+                            _sk_verdict = f"✗ |왜도| = {_abs_sk_r:.2f} ≥ 1 → 강한 비대칭."
+                        interp_rows.append({
+                            "검정·통계": "Skew",
+                            "값": f"{_sk_v_r:+.2f}  (정규분포 = 0)",
+                            "해석·판정": _sk_verdict,
+                        })
+
+                        _ku_v_r = _r2(_ku_v)
+                        _ku_dev = abs(_ku_v_r - 3) if np.isfinite(_ku_v_r) else float("nan")
+                        if np.isfinite(_ku_dev) and _ku_dev < 1:
+                            _ku_verdict = f"✓ |첨도 − 3| = {_ku_dev:.2f} < 1 → 정규에 근사."
+                        else:
+                            _ku_verdict = f"⚠ |첨도 − 3| = {_ku_dev:.2f} ≥ 1 → 정규에서 이탈 (꼬리 두꺼움/얇음)."
+                        interp_rows.append({
+                            "검정·통계": "Kurtosis",
+                            "값": f"{_ku_v_r:.2f}  (정규분포 = 3)",
+                            "해석·판정": _ku_verdict,
+                        })
+
+                        interp_df = pd.DataFrame(interp_rows)
+
+                        def _interp_color(v):
+                            if isinstance(v, str):
+                                if v.startswith("✗"):
+                                    return "color: #d62728; font-weight: 600"
+                                if v.startswith("⚠"):
+                                    return "color: #ff9f1c; font-weight: 600"
+                                if v.startswith("✓"):
+                                    return "color: #2ca02c; font-weight: 600"
+                            return ""
+
+                        interp_style = (
+                            interp_df.style
+                            .map(_interp_color, subset=["해석·판정"])
+                            .hide(axis="index")
+                        )
+                        st.dataframe(interp_style, hide_index=True, use_container_width=True)
+                    except Exception as _interp_err:
+                        st.warning(f"진단 결과 해석 계산 실패: {_interp_err}")
+
                 # ── 자동 분석 리포트 ──
                 st.markdown("---")
                 st.subheader("📝 자동 분석 리포트")
@@ -1078,10 +1824,7 @@ if uploaded_file is not None:
                 # 지표별 최적 모델 추출
                 best_by = {}
                 for m in metric_names:
-                    if m in bias_names:
-                        idx = df_metrics[m].abs().idxmin()
-                    else:
-                        idx = df_metrics[m].idxmin()
+                    idx = df_metrics[m].idxmin()
                     best_by[m] = (df_metrics.loc[idx, "Model"], df_metrics.loc[idx, m])
 
                 # 상위 3개 모델
@@ -1185,7 +1928,7 @@ if uploaded_file is not None:
 - 훈련 / 테스트: **{len(y_train)}개 / {len(y_test)}개**<br>
 - 예측 시평: **{horizon} 스텝** | 계절 주기: **{sp}**<br>
 - 예측 방식: **{method_txt}**<br>
-- 평가 모델: **{len(metrics_results)}개**{f" (전통 통계 {len(trad_in_results)}개 + ML {len(ml_in_results)}개)" if ml_in_results else ""} | 평가 지표: **8개**
+- 평가 모델: **{len(metrics_results)}개**{f" (전통 통계 {len(trad_in_results)}개 + ML {len(ml_in_results)}개)" if ml_in_results else ""} | 평가 지표: **6개** (+ 편향 진단 2개)
 
 <h4 style="color:#0c5460;">지표별 최적 모델</h4>
 
@@ -1201,12 +1944,12 @@ if uploaded_file is not None:
 
 <h4 style="color:#0c5460;">최종 결론</h4>
 
-본 실험에서 **{top3.iloc[0]['Model']}** 모델이 전체 8개 평가 지표의 평균 순위 **{top3.iloc[0]['평균 순위']:.2f}위**로
+본 실험에서 **{top3.iloc[0]['Model']}** 모델이 6개 성능 지표의 평균 순위 **{top3.iloc[0]['평균 순위']:.2f}위**로
 가장 높은 종합 성능을 기록하였습니다.<br><br>
 특히 MAPE {df_metrics.loc[df_metrics['Model']==top3.iloc[0]['Model'], 'MAPE(%)'].values[0]:.2f}%,
 RMSE {df_metrics.loc[df_metrics['Model']==top3.iloc[0]['Model'], 'RMSE'].values[0]:.3f}를 달성하여
 예측 정확도와 오차 크기 모두에서 우수한 결과를 보였습니다.<br><br>
-따라서 현재 데이터와 실험 조건({method_txt}, horizon={horizon})에서는
+따라서 현재 데이터와 실험 조건({method_txt})에서는
 **{top3.iloc[0]['Model']}**의 예측 결과를 최우선으로 활용할 것을 권장합니다.
 
 </div>"""
@@ -1226,8 +1969,8 @@ else:
     st.markdown("---")
     st.markdown("### 주요 기능")
     st.markdown("""
-- **11가지 예측 모델**: Naive, SMA, ExpSmoothing, Holt, Holt-Winters, STL, ARIMA, SARIMA, AutoARIMA, Theta, Prophet
-- **8가지 평가 지표**: MSE, RMSE, MAE, MAPE, MASE, MdRAE (정확도) + RSFE, TS (편향 진단)
+- **9가지 예측 모델**: Naive, SMA, ExpSmoothing, Holt, Holt-Winters, STL, AutoARIMA, Theta, Prophet
+- **6가지 평가 지표**: MSE, RMSE, MAE, MAPE, MASE, MdRAE + 편향 진단(RSFE, TS)
 - **하이퍼파라미터 튜닝**: 모델별 핵심 파라미터 실시간 조절
 - **심층 분석**: 계절 분해, 잔차 분석, 레이더 차트
 """)
@@ -1245,8 +1988,6 @@ else:
 - **STL**: Loess 기반 계절-추세 분해
 
 **통계 모델**
-- **ARIMA**: 사용자 지정 (p,d,q) 파라미터
-- **SARIMA**: 계절 ARIMA, (p,d,q)(P,D,Q,sp) 파라미터
 - **AutoARIMA**: 자동 ARIMA 파라미터 탐색
 - **Theta**: 지수평활 + 곡률 결합
 

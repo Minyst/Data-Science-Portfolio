@@ -1,0 +1,33 @@
+# --- Secrets / credentials (NEVER commit) ---
+.env
+.env.*
+*.pem
+*.key
+secrets.toml
+.streamlit/secrets.toml
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# --- ML / darts / torch artifacts ---
+.darts/
+darts_logs/
+*.ckpt
+*.pt
+*.pth
+lightning_logs/
+mlruns/
+
+# --- Streamlit local config ---
+.streamlit/
+
+# --- OS / editor ---
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.log
