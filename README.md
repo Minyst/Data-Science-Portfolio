@@ -31,18 +31,22 @@
 
 ---
 
-## 🧠 Computer Vision
+## 🧠 Object Detection & Segmentation
 
-### [YOLOv10 — Pretrained vs Custom](./Computer%20Vision/YOLO)
+### [YOLOv10 — Pretrained vs Custom](./Object%20Detection%20%26%20Segmentation/YOLO)
 Pretrained YOLOv10과 Custom 학습 모델의 탐지 성능 비교. 비디오 프레임 추출 → 학습 → 재합성 파이프라인.
 
-### [Detectron2 — Pretrained vs Custom](./Computer%20Vision/Detectron)
+### [Detectron2 — Pretrained vs Custom](./Object%20Detection%20%26%20Segmentation/Detectron)
 Faster R-CNN 기반 Detectron2의 pretrained vs custom 비교.
 
-### [SAM2 + YOLO Segmentation](./Computer%20Vision/SAM)
+### [SAM2 + YOLO Segmentation](./Object%20Detection%20%26%20Segmentation/SAM)
 YOLO로 객체 탐지 후 SAM2로 세그멘테이션 마스크 생성·오버레이.
 
-### [CLIP — Zero-Shot Image Classification](./Computer%20Vision/CLIP)
+---
+
+## 🖼️ Multimodal
+
+### [CLIP — Zero-Shot Image Classification](./CLIP)
 CLIP(Contrastive Language-Image Pretraining)으로 학습하지 않은 클래스도 텍스트 설명만으로 분류하는 zero-shot 분류.
 
 ---
