@@ -1,7 +1,6 @@
 # 🎓 Data Scientist Portfolio
 
-## 🏆 Flagship 
-## Real-Time On-Device Semantic Segmentation System for Recycling Waste Sorting
+## 🏆 Flagship Real-Time On-Device Semantic Segmentation System for Recycling Waste Sorting
 
 > 📄 **KCI 등재 논문** — 한국산업경영시스템학회지(JKSIE) Vol.49, No.1, pp.10–20 (2026.03)
 > *"실시간 온디바이스 재활용품 분리배출 세그먼테이션 시스템"*, 김민준·하정훈
